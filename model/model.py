@@ -8,11 +8,14 @@ import matplotlib.pyplot as plt
 
 # Step 1: Preprocessing
 # Load the CSV file
-data = pd.read_csv('csv/test_dataset.csv')
+data = pd.read_csv(
+    'complete_testset1.csv')
 
 # Extract the Voltage column
-voltage_values = data['Voltage (V)'].values
+voltage_values = data[(data["Voltage (V)"] > 1.5) |
+                      (data["Voltage (V)"] < -1.5)]["Voltage (V)"].values
 
+print(voltage_values)
 # Check for NaN or infinite values and remove them
 voltage_values = voltage_values[~np.isnan(voltage_values)]  # Remove NaN
 voltage_values = voltage_values[np.isfinite(
@@ -35,31 +38,42 @@ sequences = voltage_values_normalized[:num_sequences *
                                       sequence_length].reshape(num_sequences, sequence_length, 1)
 
 # Splitting into training and validation sets
-split_4_5 = int(0.8 * num_sequences)  # First 4/5 of sequences (normal data)
-split_1_5 = int(0.2 * num_sequences)  # Last 1/5 of sequences (anomalies)
+split_4_5 = int(0.9 * num_sequences)  # First 4/5 of sequences (normal data)
+split_1_5 = int(0.1 * num_sequences)  # Last 1/5 of sequences (anomalies)
 
 # Train set: First 4/5 of sequences
 train_sequences = sequences[:split_4_5]
 
 # Validation set: Last 2/5 of sequences (split into normal and anomalies)
-validation_sequences = sequences[-(2 * split_1_5):]
+validation_sequences = sequences[-(split_1_5):]
 # Initially, all validation data is normal
 validation_labels = np.zeros(2 * split_1_5)
 
-# Last 1/5 (which is 17/2 of validation set) should be anomalies
-anomaly_start_index = int(-split_1_5)
+# Half of the last 1/5 should be anomalies
+anomaly_start_index = int(-split_1_5/2)
 validation_labels[anomaly_start_index:] = 1  # Mark anomalies
+
+print(train_sequences, validation_sequences,
+      sequence_length, validation_sequences, sequence_length)
 
 # Step 2: Build and Train Autoencoder
 input_shape = (sequence_length, 1)
 inputs = Input(shape=input_shape)
 
-# Use tanh activation instead of relu
-encoded = LSTM(32, activation='tanh')(inputs)
+# Encoder (LSTM stack)
+encoded = LSTM(128, activation='tanh', return_sequences=True)(inputs)
+encoded = LSTM(64, activation='tanh')(encoded)
+
+# Decoder (LSTM stack)
 decoded = RepeatVector(sequence_length)(encoded)
-decoded = LSTM(32, activation='tanh', return_sequences=True)(decoded)
+decoded = LSTM(64, activation='tanh', return_sequences=True)(decoded)
+decoded = LSTM(128, activation='tanh', return_sequences=True)(decoded)
+
+# Output layer
+decoded = TimeDistributed(Dense(64, activation='tanh'))(decoded)
 decoded = TimeDistributed(Dense(1))(decoded)
 
+# Compile model
 autoencoder = Model(inputs, decoded)
 autoencoder.compile(optimizer='adam', loss='mse')
 
@@ -67,9 +81,9 @@ autoencoder.compile(optimizer='adam', loss='mse')
 history = autoencoder.fit(
     train_sequences, train_sequences,
     epochs=20,
-    batch_size=32,
+    batch_size=16,
     validation_data=(validation_sequences, validation_sequences),
-    shuffle=True
+    shuffle=False
 )
 
 # Step 3: Detect Anomalies

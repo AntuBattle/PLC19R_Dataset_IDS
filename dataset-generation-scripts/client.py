@@ -8,6 +8,7 @@ from time import sleep
 SERVER_IP = "10.10.10.20"
 SERVER_PORT = 50222
 
+
 def main():
     # Connect to the Modbus server
     client = ModbusTcpClient(SERVER_IP, port=SERVER_PORT)
@@ -23,8 +24,8 @@ def main():
                 if response.isError():
                     print("Error reading holding registers:", response)
                 else:
-                    print("Holding Registers:", response.registers)
-
+                    pass
+                """
                 # Example 2: Write a single holding register
                 print("\nWriting to a holding register...")
                 write_response = client.write_register(address=0, value=random.randint(1, 2000))
@@ -56,14 +57,15 @@ def main():
                     print("Error writing coils:", write_coil_response)
                 else:
                     print("Successfully wrote Coils.")
+                """
             except Exception as e:
                 print(f"An error occurred: {e}")
             sleep(1)
-            
+
     finally:
         # Close the client connection
         client.close()
 
+
 if __name__ == "__main__":
     main()
-
