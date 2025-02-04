@@ -1,0 +1,4 @@
+read_coils_authorized filter=lfs diff=lfs merge=lfs -text
+read_coils_unauthorized filter=lfs diff=lfs merge=lfs -text
+read_holding_authorized filter=lfs diff=lfs merge=lfs -text
+read_input_registers_authorized filter=lfs diff=lfs merge=lfs -text
