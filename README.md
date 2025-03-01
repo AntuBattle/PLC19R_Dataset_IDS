@@ -1,4 +1,4 @@
-# Modbus analog signals collection sdataset and IDS
+# Modbus analog signals collection dataset and IDS
 This project aims at developing an IDS model that detects and blocks unauthorized devices from sending signals in a ModBus network.
 
 The ModBus protocol does not account for any type of encription or privacy. 
