@@ -5,28 +5,28 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, LSTM, RepeatVector, TimeDistributed, Dense
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
+from sys import argv, exit
+
+# Defining Macros
+TRAIN_SET_SPLIT = 0.75  # Percentage of dataset that will form the training set
 
 # Step 1: Preprocessing
 # Load the CSV file
-data = pd.read_csv(
-    'complete_testset1.csv')
+data = pd.read_csv(argv[1])
 
 # Extract the Voltage column
-voltage_values = data[(data["Voltage (V)"] > 1.5) |
-                      (data["Voltage (V)"] < -1.5)]["Voltage (V)"].values
+voltage_values = data['Voltage (V)'].values
 
-print(voltage_values)
 # Check for NaN or infinite values and remove them
 voltage_values = voltage_values[~np.isnan(voltage_values)]  # Remove NaN
-voltage_values = voltage_values[np.isfinite(
-    voltage_values)]  # Remove infinite values
+voltage_values = voltage_values[np.isfinite(voltage_values)]  # Remove infinite values
 
 # Normalize the entire dataset (before splitting into normal/anomalous)
 scaler = MinMaxScaler()
 voltage_values_normalized = scaler.fit_transform(voltage_values.reshape(-1, 1))
 
 # Reshape into sequences
-sequence_length = 1000  # Choose a sequence length that divides the data evenly
+sequence_length = 50  # Choose a sequence length that divides the data evenly
 num_sequences = len(voltage_values_normalized) // sequence_length
 
 # Ensure we have enough sequences
@@ -37,70 +37,58 @@ if num_sequences == 0:
 sequences = voltage_values_normalized[:num_sequences *
                                       sequence_length].reshape(num_sequences, sequence_length, 1)
 
-# Splitting into training and validation sets
-split_4_5 = int(0.9 * num_sequences)  # First 4/5 of sequences (normal data)
-split_1_5 = int(0.1 * num_sequences)  # Last 1/5 of sequences (anomalies)
+# Splitting into training, validation, and test sets
+train_split = int(TRAIN_SET_SPLIT * num_sequences)  # Training set is 75% of the whole dataset
+remaining_sequences = sequences[train_split:]  # Remaining 25%
 
-# Train set: First 4/5 of sequences
-train_sequences = sequences[:split_4_5]
+# Split remaining into validation (75% of remaining) and test (25% of remaining)
+val_test_split = int(0.75 * len(remaining_sequences))
+validation_sequences = remaining_sequences[:val_test_split]
+test_sequences = remaining_sequences[val_test_split:]
 
-# Validation set: Last 2/5 of sequences (split into normal and anomalies)
-validation_sequences = sequences[-(split_1_5):]
-# Initially, all validation data is normal
-validation_labels = np.zeros(2 * split_1_5)
+# Create test labels: half authorized (0), half unauthorized (1)
+test_labels = np.zeros(len(test_sequences))
+half_test = len(test_sequences) // 3
+test_labels[half_test:] = 1  # Mark the latter half as unauthorized
 
-# Half of the last 1/5 should be anomalies
-anomaly_start_index = int(-split_1_5/2)
-validation_labels[anomaly_start_index:] = 1  # Mark anomalies
-
-print(train_sequences, validation_sequences,
-      sequence_length, validation_sequences, sequence_length)
+# Train set
+train_sequences = sequences[:train_split]
 
 # Step 2: Build and Train Autoencoder
 input_shape = (sequence_length, 1)
 inputs = Input(shape=input_shape)
 
-# Encoder (LSTM stack)
-encoded = LSTM(128, activation='tanh', return_sequences=True)(inputs)
-encoded = LSTM(64, activation='tanh')(encoded)
-
-# Decoder (LSTM stack)
+# Use tanh activation instead of relu
+encoded = LSTM(64, activation='tanh')(inputs)
 decoded = RepeatVector(sequence_length)(encoded)
 decoded = LSTM(64, activation='tanh', return_sequences=True)(decoded)
-decoded = LSTM(128, activation='tanh', return_sequences=True)(decoded)
-
-# Output layer
-decoded = TimeDistributed(Dense(64, activation='tanh'))(decoded)
 decoded = TimeDistributed(Dense(1))(decoded)
 
-# Compile model
 autoencoder = Model(inputs, decoded)
 autoencoder.compile(optimizer='adam', loss='mse')
 
 # Train the autoencoder
 history = autoencoder.fit(
     train_sequences, train_sequences,
-    epochs=20,
-    batch_size=16,
+    epochs=200,
+    batch_size=64,
     validation_data=(validation_sequences, validation_sequences),
     shuffle=False
 )
 
-# Step 3: Detect Anomalies
-# Reconstruct the sequences
-reconstructed_sequences = autoencoder.predict(validation_sequences)
+# Step 3: Detect Anomalies on Test Set
+# Reconstruct the test sequences
+reconstructed_test = autoencoder.predict(test_sequences)
 
 # Compute the reconstruction error (Mean Squared Error)
-mse = np.mean(np.square(validation_sequences -
-              reconstructed_sequences), axis=(1, 2))
+mse = np.mean(np.square(test_sequences - reconstructed_test), axis=(1, 2))
 
 # Define a threshold for anomaly detection
-threshold = np.mean(mse) + 2 * np.std(mse)  # Example threshold
-predicted_labels = (mse > threshold).astype(
-    int)  # 1 for anomalies, 0 for normal
+threshold = np.mean(mse) + 0.4 * np.std(mse)
+predicted_labels = (mse > threshold).astype(int)  # 1 for anomalies, 0 for normal
 
 # Step 4: Calculate Confusion Matrix
-conf_matrix = confusion_matrix(validation_labels, predicted_labels)
+conf_matrix = confusion_matrix(test_labels, predicted_labels)
 
 # Print the confusion matrix
 print("Confusion Matrix:")

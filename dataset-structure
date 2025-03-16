@@ -1,0 +1,3 @@
+184 authorized signals of about 14000 rows each.
+23 of which will be validation set
+actually 34 of which will be validation and 12 in the testset. Testset will also contnain 12 unauthorized signals as well

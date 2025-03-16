@@ -3,23 +3,22 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import confusion_matrix, precision_recall_curve
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, LSTM, Bidirectional, Dense, Dropout, RepeatVector, TimeDistributed, Conv1D, MaxPooling1D, BatchNormalization, GlobalAveragePooling1D
+from tensorflow.keras.layers import Input, LSTM, Bidirectional, Dense, Dropout, RepeatVector, TimeDistributed, Conv1D, MaxPooling1D, BatchNormalization
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from tensorflow.keras.optimizers import Adam
 import matplotlib.pyplot as plt
 from sys import argv
-from collections import defaultdict
 
 # ========================
 # CONFIGURATION PARAMETERS
 # ========================
-COMMAND_LENGTH = 18500     # Points per complete command
+COMMAND_LENGTH = 14500     # Points per complete command
 SEQUENCE_LENGTH = 100      # Increased to capture temporal patterns
 OVERLAP = 20               # Sequences overlap for better coverage
 BATCH_SIZE = 64            # Smaller batches for better gradient estimates
 EPOCHS = 70                # With early stopping
 TRAIN_RATIO = 0.85         # Percentage of authorized commands for training
-NOISE_FACTOR = 0.02        # Data augmentation noise level
+NOISE_FACTOR = 0.04        # Data augmentation noise level
 
 # ========================
 # DATA PROCESSING PIPELINE
@@ -30,13 +29,12 @@ data = pd.read_csv(argv[1], header=0)
 voltage = data['Voltage (V)'].values
 
 # Verify dataset structure
-total_points = 3510620
-auth_length = 3347333
+total_points = 2721232
 assert len(voltage) == total_points, f"Data mismatch: Expected {total_points} points, got {len(voltage)}"
 
 # Split into authorized and unauthorized
-authorized_data = voltage[:auth_length]
-unauthorized_data = voltage[auth_length:]
+authorized_data = voltage[:2588441]
+unauthorized_data = voltage[2588441:]
 
 def safe_split_commands(data, command_length):
     """Split data into complete commands with exact length"""
@@ -48,7 +46,7 @@ def safe_split_commands(data, command_length):
 auth_commands = safe_split_commands(authorized_data, COMMAND_LENGTH)
 train_commands = auth_commands[:int(TRAIN_RATIO * len(auth_commands))]
 val_commands = auth_commands[len(train_commands):]
-unauth_commands = safe_split_commands(unauthorized_data, 14500)
+unauth_commands = safe_split_commands(unauthorized_data, 11000)
 
 # Create global scaler
 train_commands_flat = np.concatenate(train_commands)
@@ -57,8 +55,7 @@ scaler = MinMaxScaler().fit(train_commands_flat.reshape(-1, 1))
 def create_sequences(commands, seq_length, scaler, overlap=0):
     """Create sequences with overlap using global scaler"""
     sequences = []
-    command_ids = []  # Track command indices
-    for cmd_idx, cmd in enumerate(commands):
+    for cmd in commands:
         if len(cmd) < seq_length:
             continue
 
@@ -72,13 +69,12 @@ def create_sequences(commands, seq_length, scaler, overlap=0):
             start = i * step
             seq = normalized_cmd[start:start+seq_length]
             sequences.append(seq)
-            command_ids.append(cmd_idx)
-    return np.array(sequences), np.array(command_ids)
+    return np.array(sequences)
 
-# Generate sequences and command IDs
-train_seq, train_cmd_ids = create_sequences(train_commands, SEQUENCE_LENGTH, scaler, OVERLAP)
-val_seq, val_cmd_ids = create_sequences(val_commands, SEQUENCE_LENGTH, scaler, OVERLAP)
-test_seq, test_cmd_ids = create_sequences(unauth_commands, SEQUENCE_LENGTH, scaler, OVERLAP)
+# Generate sequences
+train_seq = create_sequences(train_commands, SEQUENCE_LENGTH, scaler, OVERLAP)
+val_seq = create_sequences(val_commands, SEQUENCE_LENGTH, scaler, OVERLAP)
+test_seq = create_sequences(unauth_commands, SEQUENCE_LENGTH, scaler, OVERLAP)
 
 # Add noise to training data
 train_seq_noisy = train_seq + NOISE_FACTOR * np.random.normal(size=train_seq.shape)
@@ -104,10 +100,10 @@ def build_cnn_lstm_model(seq_len):
     x = MaxPooling1D(2)(x)
     x = BatchNormalization()(x)
 
-    # LSTM Processing with Global Pooling
+    # LSTM Processing
     x = Bidirectional(LSTM(128, return_sequences=True))(x)
     x = Dropout(0.3)(x)
-    x = GlobalAveragePooling1D()(x)  # Global aggregator via pooling
+    x = Bidirectional(LSTM(64))(x)
 
     # Decoder
     x = RepeatVector(seq_len)(x)
@@ -160,47 +156,17 @@ f1_scores = 2 * (precisions * recalls) / (precisions + recalls + 1e-8)
 best_idx = np.argmax(f1_scores)
 optimal_threshold = thresholds[best_idx]
 
-# Apply optimal threshold to individual sequences
-val_preds = (val_mse > optimal_threshold).astype(int)
-test_preds = (test_mse > optimal_threshold).astype(int)
+# Apply optimal threshold
+pred_labels = (combined_mse > optimal_threshold).astype(int)
 
-# Group predictions by command ID and apply majority vote
-val_cmd_preds = defaultdict(list)
-for cmd_id, pred in zip(val_cmd_ids, val_preds):
-    val_cmd_preds[cmd_id].append(pred)
-
-val_cmd_predictions = []
-for cmd_id in val_cmd_preds:
-    votes = val_cmd_preds[cmd_id]
-    majority = 1 if sum(votes) > len(votes) / 2 else 0
-    val_cmd_predictions.append(majority)
-
-val_true = np.zeros(len(val_cmd_predictions))  # All validation commands are authorized
-
-test_cmd_preds = defaultdict(list)
-for cmd_id, pred in zip(test_cmd_ids, test_preds):
-    test_cmd_preds[cmd_id].append(pred)
-
-test_cmd_predictions = []
-for cmd_id in test_cmd_preds:
-    votes = test_cmd_preds[cmd_id]
-    majority = 1 if sum(votes) > len(votes) / 2 else 0
-    test_cmd_predictions.append(majority)
-
-test_true = np.ones(len(test_cmd_predictions))  # All test commands are unauthorized
-
-# Combine into overall command-level evaluation
-all_true = np.concatenate([val_true, test_true])
-all_pred = np.concatenate([val_cmd_predictions, test_cmd_predictions])
-
-# Compute metrics
-cm = confusion_matrix(all_true, all_pred)
+# Metrics
+cm = confusion_matrix(combined_labels, pred_labels)
 tn, fp, fn, tp = cm.ravel()
 
 print(f"Optimal Threshold: {optimal_threshold:.4f}")
 print(f"Recall: {tp/(tp+fn):.4f}")
 print(f"Precision: {tp/(tp+fp):.4f}")
-#print(f"F1-Score: {2*(tp/(tp+fp)*(tp/(tp+fn))/(tp/(tp+fp)+tp/(tp+fn)+1e-8):.4f}")
+print(f"F1-Score: {2*(tp/(tp+fp)*(tp/(tp+fn))/(tp/(tp+fp)+tp/(tp+fn))):.4f}")
 print("Confusion Matrix:")
 print(cm)
 

@@ -13,5 +13,5 @@ dependencies = [
     "pymso5000-tspspi>=0.0.10",
     "pyqt6>=6.8.0",
     "scikit-learn>=1.6.1",
-    "tensorflow>=2.18.0",
+    "tensorflow[and-cuda]>=2.18.0",
 ]
